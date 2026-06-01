@@ -14,6 +14,7 @@ export default function RecipesPage() {
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState('');
   const [category, setCategory] = useState<string>('All');
+  const [seeding, setSeeding] = useState(false);
   const { showToast } = useToast();
 
   const fetchRecipes = useCallback(async () => {
@@ -46,6 +47,20 @@ export default function RecipesPage() {
         prev.map((r) => (r.id === id ? { ...r, is_favourite: !current } : r))
       );
     }
+  }
+
+  async function seedRecipes() {
+    setSeeding(true);
+    try {
+      const res = await fetch('/api/seed-recipes', { method: 'POST' });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error);
+      showToast(`Added ${data.inserted} test recipes!`, 'success');
+      await fetchRecipes();
+    } catch (err) {
+      showToast(err instanceof Error ? err.message : 'Seed failed', 'error');
+    }
+    setSeeding(false);
   }
 
   const filtered = recipes.filter((r) => {
@@ -110,12 +125,21 @@ export default function RecipesPage() {
               : "No recipes match your search."}
           </p>
           {recipes.length === 0 && (
-            <Link
-              href="/recipes/new"
-              className="mt-4 inline-block bg-blue-600 text-white rounded-lg px-4 py-2 text-sm font-medium hover:bg-blue-700"
-            >
-              Add Recipe
-            </Link>
+            <div className="mt-4 flex flex-col items-center gap-2">
+              <Link
+                href="/recipes/new"
+                className="inline-block bg-blue-600 text-white rounded-lg px-4 py-2 text-sm font-medium hover:bg-blue-700"
+              >
+                Add Recipe
+              </Link>
+              <button
+                onClick={seedRecipes}
+                disabled={seeding}
+                className="text-xs text-gray-400 hover:text-gray-600 underline underline-offset-2 disabled:opacity-50"
+              >
+                {seeding ? 'Adding test recipes…' : 'Or add 10 test recipes'}
+              </button>
+            </div>
           )}
         </div>
       ) : (
