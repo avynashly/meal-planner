@@ -58,8 +58,16 @@ export default function PlannerPage() {
   const [customMeal, setCustomMeal] = useState('');
   const [addSaving, setAddSaving] = useState(false);
 
-  // View/change/remove modal for filled cells
   const [filledModal, setFilledModal] = useState<CellModalState | null>(null);
+
+  // AI planning state
+  const [aiModalOpen, setAiModalOpen] = useState(false);
+  const [aiPrompt, setAiPrompt] = useState('');
+  const [aiReplace, setAiReplace] = useState(false);
+  const [aiLoading, setAiLoading] = useState(false);
+  const [aiError, setAiError] = useState('');
+  const [aiSummary, setAiSummary] = useState('');
+  const [summaryDismissed, setSummaryDismissed] = useState(false);
 
   const weekStr = formatDateLocal(weekStart);
 
@@ -96,6 +104,12 @@ export default function PlannerPage() {
   }, [weekStr]);
 
   useEffect(() => { loadData(); }, [loadData]);
+
+  // Reset AI summary when week changes
+  useEffect(() => {
+    setAiSummary('');
+    setSummaryDismissed(false);
+  }, [weekStr]);
 
   function getEntry(day: DayOfWeek, meal: MealType) {
     return entries.find((e) => e.day_of_week === day && e.meal_type === meal);
@@ -174,9 +188,53 @@ export default function PlannerPage() {
     showToast('Removed', 'info');
   }
 
+  async function handleAiPlan(e: React.FormEvent) {
+    e.preventDefault();
+    setAiLoading(true);
+    setAiError('');
+
+    // Build existing entries list for partial fill
+    const existing_entries = aiReplace
+      ? []
+      : entries.map((entry) => ({
+          day_of_week: entry.day_of_week,
+          meal_type: entry.meal_type,
+          label: entry.recipe?.name ?? entry.custom_meal ?? '',
+        }));
+
+    try {
+      const res = await fetch('/api/plan-week', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ week_start: weekStr, prompt: aiPrompt, existing_entries }),
+      });
+
+      const data = await res.json();
+
+      if (!res.ok) {
+        setAiError(data.error ?? 'Something went wrong. Please try again.');
+        setAiLoading(false);
+        return;
+      }
+
+      setAiModalOpen(false);
+      setAiPrompt('');
+      setAiReplace(false);
+      setAiSummary(data.summary ?? '');
+      setSummaryDismissed(false);
+      showToast('Your week is planned!', 'success');
+      await loadData();
+    } catch {
+      setAiError('Network error. Please try again.');
+    }
+    setAiLoading(false);
+  }
+
   const filteredRecipes = recipes.filter((r) =>
     r.name.toLowerCase().includes(recipeSearch.toLowerCase())
   );
+
+  const weekLabel = `Week of ${formatDisplay(weekStart)} – ${formatDisplay(addDays(weekStart, 6))}`;
 
   return (
     <div>
@@ -184,8 +242,8 @@ export default function PlannerPage() {
         <h1 className="text-2xl font-bold text-gray-900">Planner</h1>
       </div>
 
-      {/* Week navigation */}
-      <div className="flex items-center gap-3 mb-5">
+      {/* Week navigation + AI button */}
+      <div className="flex flex-wrap items-center gap-2 mb-3">
         <button
           onClick={() => setWeekStart((w) => addDays(w, -7))}
           className="border border-gray-200 rounded-lg px-3 py-1.5 text-sm hover:bg-gray-50"
@@ -207,7 +265,31 @@ export default function PlannerPage() {
         >
           Next →
         </button>
+
+        {recipes.length >= 3 && (
+          <button
+            onClick={() => { setAiModalOpen(true); setAiError(''); }}
+            className="ml-auto flex items-center gap-1.5 bg-indigo-600 text-white rounded-lg px-4 py-1.5 text-sm font-medium hover:bg-indigo-700 transition-colors"
+          >
+            <span>✨</span> Plan with AI
+          </button>
+        )}
       </div>
+
+      {/* AI summary banner */}
+      {aiSummary && !summaryDismissed && (
+        <div className="mb-4 bg-indigo-50 border border-indigo-200 rounded-xl px-4 py-3 flex gap-3 items-start">
+          <span className="text-indigo-500 text-lg flex-shrink-0">✨</span>
+          <p className="text-sm text-indigo-800 flex-1">{aiSummary}</p>
+          <button
+            onClick={() => setSummaryDismissed(true)}
+            className="text-indigo-400 hover:text-indigo-600 flex-shrink-0 text-lg leading-none"
+            aria-label="Dismiss"
+          >
+            ×
+          </button>
+        </div>
+      )}
 
       {loading ? (
         <div className="flex justify-center py-16">
@@ -298,6 +380,73 @@ export default function PlannerPage() {
           </div>
         </>
       )}
+
+      {/* AI planning modal */}
+      <Modal
+        open={aiModalOpen}
+        onClose={() => { if (!aiLoading) setAiModalOpen(false); }}
+        title="Plan my week with AI"
+      >
+        <form onSubmit={handleAiPlan} className="flex flex-col gap-4">
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-1">Week being planned</label>
+            <div className="text-sm text-gray-500 bg-gray-50 rounded-lg px-3 py-2 border border-gray-200">{weekLabel}</div>
+          </div>
+
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-1">What should I know for this week?</label>
+            <textarea
+              rows={4}
+              value={aiPrompt}
+              onChange={(e) => setAiPrompt(e.target.value)}
+              disabled={aiLoading}
+              className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500 resize-none disabled:opacity-60"
+              placeholder="e.g. I have chicken and spinach at home. Busy weekdays — keep it under 30 min. One vegetarian day. We had a lot of pasta last week."
+              required
+            />
+          </div>
+
+          <label className="flex items-center gap-2 text-sm text-gray-700 cursor-pointer select-none">
+            <input
+              type="checkbox"
+              checked={aiReplace}
+              onChange={(e) => setAiReplace(e.target.checked)}
+              disabled={aiLoading}
+              className="rounded border-gray-300 text-indigo-600 focus:ring-indigo-500"
+            />
+            Replace existing meals this week
+          </label>
+
+          {aiError && (
+            <p className="text-sm text-red-600 bg-red-50 border border-red-200 rounded-lg px-3 py-2">{aiError}</p>
+          )}
+
+          {aiLoading && (
+            <div className="flex flex-col items-center gap-3 py-2">
+              <div className="w-8 h-8 border-2 border-indigo-600 border-t-transparent rounded-full animate-spin" />
+              <p className="text-sm text-indigo-700 font-medium">Claude is planning your week…</p>
+            </div>
+          )}
+
+          <div className="flex gap-2 pt-1">
+            <button
+              type="button"
+              onClick={() => setAiModalOpen(false)}
+              disabled={aiLoading}
+              className="flex-1 border border-gray-300 text-gray-700 rounded-lg px-4 py-2 text-sm font-medium hover:bg-gray-50 disabled:opacity-50"
+            >
+              Cancel
+            </button>
+            <button
+              type="submit"
+              disabled={aiLoading || !aiPrompt.trim()}
+              className="flex-1 bg-indigo-600 text-white rounded-lg px-4 py-2 text-sm font-medium hover:bg-indigo-700 disabled:opacity-50 flex items-center justify-center gap-2"
+            >
+              {aiLoading ? 'Planning…' : '✨ Plan my week'}
+            </button>
+          </div>
+        </form>
+      </Modal>
 
       {/* Add entry modal */}
       <Modal
